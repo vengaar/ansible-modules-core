@@ -25,7 +25,7 @@ description:
     if state=absent is passed as an argument.
   - Will be marked changed when called only if there are ELBs found to operate on.
 version_added: "1.2"
-author: John Jarvis
+author: "John Jarvis (@jarv)"
 options:
   state:
     description:
@@ -36,6 +36,7 @@ options:
     description:
       - list of EC2 Instance ID (alias of instance_id)
     required: true
+    aliases: ["instance_id"]    
   ec2_elbs:
     description:
       - List of ELB names, required for registration. The ec2_elbs fact should be used if there was a previous de-register.
@@ -126,14 +127,14 @@ try:
     import boto.ec2
     import boto.ec2.elb
     from boto.regioninfo import RegionInfo
+    HAS_BOTO = True
 except ImportError:
-    print "failed=True msg='boto required for this module'"
-    sys.exit(1)
+    HAS_BOTO = False    
 
 class ElbManager:
     """Handles EC2 instance ELB registration and de-registration"""
 
-    def __init__(self, module, instance_ids=[], ec2_elbs=None,
+    def __init__(self, module, instance_ids=None, ec2_elbs=None,
                  region=None, **aws_connect_params):
         self.module = module
         self.instance_ids = instance_ids
@@ -192,18 +193,11 @@ class ElbManager:
 
     def _enable_availailability_zone(self, lb):
         """Enable the current instance's availability zone in the provided lb.
-        Returns True if the zone was enabled or False if no change was made.
         lb: load balancer"""
         instances = self._get_instance()
         for instance in instances:
-            if instance.placement in lb.availability_zones:
-                return False
-            lb.enable_zones(zones=instance.placement)
-
-        # If successful, the new zone will have been added to
-        # lb.availability_zones
-        return True
-#         return instance.placement in lb.availability_zones
+            if instance.placement not in lb.availability_zones:
+                lb.enable_zones(zones=instance.placement)
 
     def _await_elb_instance_state(self, lb, awaited_state, initial_states, timeout):
         """Wait for an ELB to change state
@@ -239,7 +233,7 @@ class ElbManager:
             
             self.wait_attempt[lb.name] = self.wait_attempt[lb.name] + 1
             # min healthcheck interval
-            time.sleep(5)
+            time.sleep(lb.health_check.interval)
 
 
     def _get_instance_health(self, lb):
@@ -276,11 +270,9 @@ class ElbManager:
             lbs = sorted(lb for lb in elbs if lb.name in ec2_elbs)
         else:
             lbs = []
-            
-            instances_searched = Set(self.instance_ids)
+            instances_searched = set(self.instance_ids)
             for lb in elbs:
-                
-                instances_lb = Set([
+                instances_lb = set([
                     info.id
                     for info in lb.instances
                 ])
@@ -315,6 +307,8 @@ def main():
     module = AnsibleModule(
         argument_spec=argument_spec,
     )
+    if not HAS_BOTO:
+        module.fail_json(msg='boto required for this module')
 
     region, ec2_url, aws_connect_params = get_aws_connection_info(module)
 
